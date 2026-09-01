@@ -9,8 +9,8 @@ SELECT TOP (20)
 FROM SSISDB.catalog.executions e
 LEFT JOIN SSISDB.catalog.event_messages em ON e.execution_id = em.operation_id
 WHERE e.status = 4                                    -- Failed
-  AND CONVERT(date, e.start_time) = CONVERT(date, GETDATE())
-  AND em.message_type IN (120, 130)                    -- Today
+  AND CONVERT(date, e.start_time) = CONVERT(date, GETDATE())-- Today
+  AND em.message_type IN (120, 130)  -- 120 = Error, 130 = Task Failed                  
 ORDER BY e.execution_id DESC, em.message_time;
 
 
