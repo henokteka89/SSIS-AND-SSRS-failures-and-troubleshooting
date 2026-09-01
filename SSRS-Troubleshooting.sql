@@ -53,14 +53,11 @@ ORDER BY TotalTimeMs DESC;
 
 
 -- 4) Search execution history for a specific report by path/name
---    Filters for subscriptions with errors and excludes those with "0 errors" status
 SELECT TOP (50)
     el.InstanceName, el.UserName, el.RequestType, el.Format, el.Status,
     el.TimeStart, el.TimeEnd, el.Parameters
 FROM ReportServer.dbo.ExecutionLog3 el
 WHERE el.ItemPath LIKE '%YourReportNameHere%'
-  AND (el.Status LIKE '%error%' OR el.Status LIKE '%fail%')
-  AND el.Status NOT LIKE '%0 errors%'
 ORDER BY el.TimeStart DESC;
 
 
@@ -78,14 +75,15 @@ ORDER BY s.LastRunTime DESC;
 
 
 -- 6) Failed / errored subscriptions only
+--    Filters for subscriptions with errors and excludes those with "0 errors" status
 SELECT
     s.SubscriptionID, c.Name AS ReportName, c.Path AS ReportPath,
     s.LastStatus, s.LastRunTime, s.Description, u.UserName AS Owner
 FROM ReportServer.dbo.Subscriptions s
 JOIN ReportServer.dbo.Catalog c ON s.Report_OID = c.ItemID
 LEFT JOIN ReportServer.dbo.Users u ON s.OwnerID = u.UserID
-WHERE s.LastStatus LIKE '%error%'
-   OR s.LastStatus LIKE '%fail%'
+WHERE (s.LastStatus LIKE '%error%' OR s.LastStatus LIKE '%fail%')
+  AND s.LastStatus NOT LIKE '%0 errors%'
 ORDER BY s.LastRunTime DESC;
 
 
