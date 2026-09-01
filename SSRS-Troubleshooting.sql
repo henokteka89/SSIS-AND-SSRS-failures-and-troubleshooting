@@ -151,14 +151,15 @@ WHERE c.Type = 5;
 --    hung. RequestPath is already a plain text column here (no Catalog
 --    join needed). Only reflects jobs actively in progress, not queued
 --    ones, and won't show anything served from cache.
-SELECT
-    rj.JobID, rj.RequestName, rj.RequestPath, rj.ComputerName,
-    u.UserName, rj.StartDate, rj.Timeout, rj.JobAction, rj.JobType, rj.JobStatus,
-    DATEDIFF(MINUTE, rj.StartDate, GETDATE()) AS RunningMinutes
-FROM ReportServer.dbo.RunningJobs rj
-LEFT JOIN ReportServer.dbo.Users u ON rj.UserId = u.UserID
+SELECT u.UserName
+, CONCAT(DATEDIFF(SECOND,rj.StartDate,GETDATE())/86400,'D ',(DATEDIFF(SECOND,rj.StartDate,GETDATE())%86400)/3600,'H '
+,(DATEDIFF(SECOND,rj.StartDate,GETDATE())%3600)/60,'m '
+,DATEDIFF(SECOND,rj.StartDate,GETDATE())%60,'s') AS RunTime
+, rj.JobID, rj.StartDate, rj.ComputerName, rj.RequestName, rj.RequestPath, rj.UserId
+, rj.Description, rj.Timeout, rj.JobAction, rj.JobType, rj.JobStatus 
+FROM ReportServer.dbo.RunningJobs rj 
+LEFT JOIN ReportServer.dbo.Users u ON rj.UserId=u.UserID 
 ORDER BY rj.StartDate;
-
 
 -- 11) Users known to the report server
 --    Useful when troubleshooting "user can't access report" issues -
