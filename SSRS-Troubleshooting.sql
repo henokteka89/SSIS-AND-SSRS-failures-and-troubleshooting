@@ -8,19 +8,9 @@
 --    NOTE: ExecutionLog3 already has a resolved ItemPath column - it does
 --    NOT have an ItemID/ReportID to join back to Catalog on.
 SELECT TOP (50)
-    el.InstanceName,
-    el.ItemPath,
-    el.UserName,
-    el.RequestType,
-    el.Format,
-    el.Status,
-    el.TimeStart,
-    el.TimeEnd,
-    el.TimeDataRetrieval,
-    el.TimeProcessing,
-    el.TimeRendering,
-    el.[RowCount],
-    el.[ByteCount]
+    el.InstanceName, el.ItemPath, el.UserName, el.RequestType, el.Format,
+    el.Status, el.TimeStart, el.TimeEnd, el.TimeDataRetrieval,
+    el.TimeProcessing, el.TimeRendering, el.[RowCount], el.[ByteCount]
 FROM ReportServer.dbo.ExecutionLog3 el
 WHERE CONVERT(date, el.TimeStart) = CONVERT(date, GETDATE())
 ORDER BY el.TimeStart DESC;
@@ -29,13 +19,9 @@ ORDER BY el.TimeStart DESC;
 -- 2) Failed executions only, with error detail
 --    Status <> 'rsSuccess' catches timeouts, data source errors,
 --    rendering failures, parameter errors, etc.
-SELECT TOP (50)
-    el.ItemPath,
-    el.UserName, el.Status, el.TimeStart, el.TimeEnd,
-    el.Parameters
+SELECT TOP (50) el.ItemPath, el.UserName, el.Status, el.TimeStart, el.TimeEnd, el.Parameters
 FROM ReportServer.dbo.ExecutionLog3 el
-WHERE el.Status <> 'rsSuccess'
-  AND el.TimeStart >= DATEADD(DAY, -7, GETDATE())
+WHERE el.Status <> 'rsSuccess' AND el.TimeStart >= DATEADD(DAY, -7, GETDATE())
 ORDER BY el.TimeStart DESC;
 
 
@@ -43,9 +29,7 @@ ORDER BY el.TimeStart DESC;
 --    Breaks total time into data retrieval / processing / rendering
 --    so you know WHERE the time is going (bad query vs. big render vs. subscription overhead).
 SELECT TOP (50)
-    el.ItemPath,
-    el.TimeStart,
-    el.TimeDataRetrieval, el.TimeProcessing, el.TimeRendering,
+    el.ItemPath, el.TimeStart, el.TimeDataRetrieval, el.TimeProcessing, el.TimeRendering,
     (el.TimeDataRetrieval + el.TimeProcessing + el.TimeRendering) AS TotalTimeMs
 FROM ReportServer.dbo.ExecutionLog3 el
 WHERE el.TimeStart >= DATEADD(DAY, -7, GETDATE())
@@ -82,17 +66,14 @@ SELECT
 FROM ReportServer.dbo.Subscriptions s
 JOIN ReportServer.dbo.Catalog c ON s.Report_OID = c.ItemID
 LEFT JOIN ReportServer.dbo.Users u ON s.OwnerID = u.UserID
-WHERE (s.LastStatus LIKE '%error%' OR s.LastStatus LIKE '%fail%')
-  AND s.LastStatus NOT LIKE '%0 errors%'
+WHERE (s.LastStatus LIKE '%error%' OR s.LastStatus LIKE '%fail%')  AND s.LastStatus NOT LIKE '%0 errors%'
 ORDER BY s.LastRunTime DESC;
 
 
 -- 7) Scheduled jobs behind a subscription (ReportServer schedule -> SQL Agent job link)
 --    Helps when a subscription silently stops firing - check if the
 --    underlying schedule/job is still active.
-SELECT
-    sch.ScheduleID, sch.Name AS ScheduleName, sch.NextRunTime, sch.LastRunTime,
-    sch.State, sub.SubscriptionID, c.Name AS ReportName
+SELECT sch.ScheduleID, sch.Name AS ScheduleName, sch.NextRunTime, sch.LastRunTime, sch.State, sub.SubscriptionID, c.Name AS ReportName
 FROM ReportServer.dbo.Schedule sch
 LEFT JOIN ReportServer.dbo.ReportSchedule rs ON sch.ScheduleID = rs.ScheduleID
 LEFT JOIN ReportServer.dbo.Subscriptions sub ON rs.SubscriptionID = sub.SubscriptionID
@@ -107,9 +88,7 @@ ORDER BY sch.NextRunTime;
 --    table name depends on your SSRS version - use whichever exists:
 --
 --    Newer SSRS versions (table: ContentCache):
-SELECT
-    c.Name AS ReportName, c.Path,
-    cc.CreatedDate, cc.ExpirationDate
+SELECT  c.Name AS ReportName, c.Path, cc.CreatedDate, cc.ExpirationDate
 FROM ReportServer.dbo.Catalog c
 JOIN ReportServerTempDB.dbo.ContentCache cc ON c.ItemID = cc.CatalogItemID
 ORDER BY cc.ExpirationDate DESC;
@@ -128,11 +107,7 @@ ORDER BY cc.ExpirationDate DESC;
 --    Confirms which data source (and connection details) a report is pointed at.
 ;WITH XMLNAMESPACES (DEFAULT 'https://schemas.microsoft.com/sqlserver/reporting/2006/03/reportdatasource')
 SELECT 
-    c.Name, 
-    c.Path,
-    TRY_CAST(
-        CAST(c.Content AS VARBINARY(MAX)) AS XML
-    ).value('(//ConnectString/text())[1]', 'NVARCHAR(MAX)') AS ConnectionString
+    c.Name, c.Path, TRY_CAST(CAST(c.Content AS VARBINARY(MAX)) AS XML).value('(//ConnectString/text())[1]', 'NVARCHAR(MAX)') AS ConnectionString
 FROM ReportServer.dbo.Catalog c 
 WHERE c.Type = 5;
 
@@ -155,8 +130,7 @@ SELECT u.UserName
 , CONCAT(DATEDIFF(SECOND,rj.StartDate,GETDATE())/86400,'D ',(DATEDIFF(SECOND,rj.StartDate,GETDATE())%86400)/3600,'H '
 ,(DATEDIFF(SECOND,rj.StartDate,GETDATE())%3600)/60,'m '
 ,DATEDIFF(SECOND,rj.StartDate,GETDATE())%60,'s') AS RunTime
-, rj.JobID, rj.StartDate, rj.ComputerName, rj.RequestName, rj.RequestPath, rj.UserId
-, rj.Description, rj.Timeout, rj.JobAction, rj.JobType, rj.JobStatus 
+, rj.*
 FROM ReportServer.dbo.RunningJobs rj 
 LEFT JOIN ReportServer.dbo.Users u ON rj.UserId=u.UserID 
 ORDER BY rj.StartDate;
@@ -164,17 +138,12 @@ ORDER BY rj.StartDate;
 -- 11) Users known to the report server
 --    Useful when troubleshooting "user can't access report" issues -
 --    confirms whether SSRS has ever seen/cached this login.
-SELECT UserID, UserName, Sid
-FROM ReportServer.dbo.Users
-ORDER BY UserName;
+SELECT UserID, UserName, Sid FROM ReportServer.dbo.Users ORDER BY UserName;
 
 
 -- 12) A specific user's effective permissions (roles) per catalog item
 --    Answers "why does/doesn't this user see this report" questions.
-SELECT
-    u.UserName,
-    c.Name AS ItemName, c.Path,
-    r.RoleName
+SELECT u.UserName, c.Name AS ItemName, c.Path, r.RoleName
 FROM ReportServer.dbo.PolicyUserRole pur
 JOIN ReportServer.dbo.Users u ON pur.UserID = u.UserID
 JOIN ReportServer.dbo.Roles r ON pur.RoleID = r.RoleID
