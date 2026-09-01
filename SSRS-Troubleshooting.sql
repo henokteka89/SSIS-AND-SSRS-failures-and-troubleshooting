@@ -5,10 +5,11 @@
 
 -- 1) Recent report executions - status, timing, and who ran them
 --    Good starting point: filter to today, look for failures/timeouts.
+--    NOTE: ExecutionLog3 already has a resolved ItemPath column - it does
+--    NOT have an ItemID/ReportID to join back to Catalog on.
 SELECT TOP (50)
     el.InstanceName,
-    c.Name              AS ReportName,
-    c.Path               AS ReportPath,
+    el.ItemPath,
     el.UserName,
     el.RequestType,
     el.Format,
@@ -18,10 +19,9 @@ SELECT TOP (50)
     el.TimeDataRetrieval,
     el.TimeProcessing,
     el.TimeRendering,
-    el.RowCount,
-    el.ByteCount
+    el.[RowCount],
+    el.[ByteCount]
 FROM ReportServer.dbo.ExecutionLog3 el
-JOIN ReportServer.dbo.Catalog c ON el.ReportID = c.ItemID
 WHERE CONVERT(date, el.TimeStart) = CONVERT(date, GETDATE())
 ORDER BY el.TimeStart DESC;
 
@@ -30,11 +30,10 @@ ORDER BY el.TimeStart DESC;
 --    Status <> 'rsSuccess' catches timeouts, data source errors,
 --    rendering failures, parameter errors, etc.
 SELECT TOP (50)
-    c.Name AS ReportName, c.Path AS ReportPath,
+    el.ItemPath,
     el.UserName, el.Status, el.TimeStart, el.TimeEnd,
     el.Parameters
 FROM ReportServer.dbo.ExecutionLog3 el
-JOIN ReportServer.dbo.Catalog c ON el.ReportID = c.ItemID
 WHERE el.Status <> 'rsSuccess'
   AND el.TimeStart >= DATEADD(DAY, -7, GETDATE())
 ORDER BY el.TimeStart DESC;
@@ -44,43 +43,44 @@ ORDER BY el.TimeStart DESC;
 --    Breaks total time into data retrieval / processing / rendering
 --    so you know WHERE the time is going (bad query vs. big render vs. subscription overhead).
 SELECT TOP (50)
-    c.Name AS ReportName, c.Path AS ReportPath,
+    el.ItemPath,
     el.TimeStart,
     el.TimeDataRetrieval, el.TimeProcessing, el.TimeRendering,
     (el.TimeDataRetrieval + el.TimeProcessing + el.TimeRendering) AS TotalTimeMs
 FROM ReportServer.dbo.ExecutionLog3 el
-JOIN ReportServer.dbo.Catalog c ON el.ReportID = c.ItemID
 WHERE el.TimeStart >= DATEADD(DAY, -7, GETDATE())
 ORDER BY TotalTimeMs DESC;
 
 
--- 4) Search execution history for a specific report by name
+-- 4) Search execution history for a specific report by path/name
 SELECT TOP (50)
     el.InstanceName, el.UserName, el.RequestType, el.Format, el.Status,
     el.TimeStart, el.TimeEnd, el.Parameters
 FROM ReportServer.dbo.ExecutionLog3 el
-JOIN ReportServer.dbo.Catalog c ON el.ReportID = c.ItemID
-WHERE c.Name = 'YourReportNameHere'
+WHERE el.ItemPath LIKE '%YourReportNameHere%'
 ORDER BY el.TimeStart DESC;
 
 
 -- 5) Subscriptions - list all, with last run status/time
 --    Useful for "why didn't my subscription email go out" type issues.
+--    Subscriptions.OwnerID is a GUID - join to Users for the readable name.
 SELECT
     s.SubscriptionID, c.Name AS ReportName, c.Path AS ReportPath,
     s.Description, s.EventType, s.LastStatus, s.LastRunTime,
-    s.DeliveryExtension, s.Owner
+    s.DeliveryExtension, u.UserName AS Owner
 FROM ReportServer.dbo.Subscriptions s
 JOIN ReportServer.dbo.Catalog c ON s.Report_OID = c.ItemID
+LEFT JOIN ReportServer.dbo.Users u ON s.OwnerID = u.UserID
 ORDER BY s.LastRunTime DESC;
 
 
 -- 6) Failed / errored subscriptions only
 SELECT
     s.SubscriptionID, c.Name AS ReportName, c.Path AS ReportPath,
-    s.LastStatus, s.LastRunTime, s.Description, s.Owner
+    s.LastStatus, s.LastRunTime, s.Description, u.UserName AS Owner
 FROM ReportServer.dbo.Subscriptions s
 JOIN ReportServer.dbo.Catalog c ON s.Report_OID = c.ItemID
+LEFT JOIN ReportServer.dbo.Users u ON s.OwnerID = u.UserID
 WHERE s.LastStatus LIKE '%error%'
    OR s.LastStatus LIKE '%fail%'
 ORDER BY s.LastRunTime DESC;
@@ -101,14 +101,25 @@ ORDER BY sch.NextRunTime;
 
 -- 8) Report cache / snapshot status
 --    Confirms whether a report is running live vs. from a cached/snapshot copy,
---    which explains "stale data" complaints.
+--    which explains "stale data" complaints. Cache data lives in the
+--    SEPARATE ReportServerTempDB database, not ReportServer, and the
+--    table name depends on your SSRS version - use whichever exists:
+--
+--    Newer SSRS versions (table: ContentCache):
 SELECT
     c.Name AS ReportName, c.Path,
-    ce.ExpirationDate, ce.Timestamp AS CachedTimestamp
+    cc.CreatedDate, cc.ExpirationDate
 FROM ReportServer.dbo.Catalog c
-LEFT JOIN ReportServer.dbo.Cache ce ON c.ItemID = ce.ItemID
-WHERE c.Type = 2   -- 2 = Report
-ORDER BY ce.Timestamp DESC;
+JOIN ReportServerTempDB.dbo.ContentCache cc ON c.ItemID = cc.CatalogItemID
+ORDER BY cc.ExpirationDate DESC;
+
+--    Older SSRS versions (table: ExecutionCache):
+-- SELECT
+--     c.Name AS ReportName, c.Path,
+--     ec.AbsoluteExpiration
+-- FROM ReportServer.dbo.Catalog c
+-- JOIN ReportServerTempDB.dbo.ExecutionCache ec ON c.ItemID = ec.ReportID
+-- ORDER BY ec.AbsoluteExpiration DESC;
 
 
 -- 9) Data source / connection info per report
@@ -122,17 +133,54 @@ JOIN ReportServer.dbo.DataSource ds ON c.ItemID = ds.ItemID
 ORDER BY c.Name;
 
 
--- 10) Error counts grouped by report over the last 30 days
+-- 10) Currently running jobs (live, right now)
+--    dbo.RunningJobs is the table behind the "Manage Jobs" screen in the
+--    web portal - use it to spot a report/subscription/refresh that's
+--    hung. RequestPath is already a plain text column here (no Catalog
+--    join needed). Only reflects jobs actively in progress, not queued
+--    ones, and won't show anything served from cache.
+SELECT
+    rj.JobID, rj.RequestName, rj.RequestPath, rj.ComputerName,
+    u.UserName, rj.StartDate, rj.Timeout, rj.JobAction, rj.JobType, rj.JobStatus,
+    DATEDIFF(MINUTE, rj.StartDate, GETDATE()) AS RunningMinutes
+FROM ReportServer.dbo.RunningJobs rj
+LEFT JOIN ReportServer.dbo.Users u ON rj.UserId = u.UserID
+ORDER BY rj.StartDate;
+
+
+-- 11) Users known to the report server
+--    Useful when troubleshooting "user can't access report" issues -
+--    confirms whether SSRS has ever seen/cached this login.
+SELECT UserID, UserName, Sid
+FROM ReportServer.dbo.Users
+ORDER BY UserName;
+
+
+-- 12) A specific user's effective permissions (roles) per catalog item
+--    Answers "why does/doesn't this user see this report" questions.
+SELECT
+    u.UserName,
+    c.Name AS ItemName, c.Path,
+    r.RoleName
+FROM ReportServer.dbo.PolicyUserRole pur
+JOIN ReportServer.dbo.Users u ON pur.UserID = u.UserID
+JOIN ReportServer.dbo.Roles r ON pur.RoleID = r.RoleID
+JOIN ReportServer.dbo.Policies p ON pur.PolicyID = p.PolicyID
+JOIN ReportServer.dbo.Catalog c ON p.PolicyID = c.PolicyID
+WHERE u.UserName LIKE '%YourUserNameHere%'
+ORDER BY c.Path;
+
+
+-- 13) Error counts grouped by report over the last 30 days
 --     Spot the "problem child" reports that fail repeatedly.
 SELECT
-    c.Name AS ReportName, c.Path,
+    el.ItemPath,
     COUNT(*) AS FailureCount,
     MAX(el.TimeStart) AS LastFailureTime
 FROM ReportServer.dbo.ExecutionLog3 el
-JOIN ReportServer.dbo.Catalog c ON el.ReportID = c.ItemID
 WHERE el.Status <> 'rsSuccess'
   AND el.TimeStart >= DATEADD(DAY, -30, GETDATE())
-GROUP BY c.Name, c.Path
+GROUP BY el.ItemPath
 ORDER BY FailureCount DESC;
 
 
