@@ -53,11 +53,14 @@ ORDER BY TotalTimeMs DESC;
 
 
 -- 4) Search execution history for a specific report by path/name
+--    Filters for subscriptions with errors and excludes those with "0 errors" status
 SELECT TOP (50)
     el.InstanceName, el.UserName, el.RequestType, el.Format, el.Status,
     el.TimeStart, el.TimeEnd, el.Parameters
 FROM ReportServer.dbo.ExecutionLog3 el
 WHERE el.ItemPath LIKE '%YourReportNameHere%'
+  AND (el.Status LIKE '%error%' OR el.Status LIKE '%fail%')
+  AND el.Status NOT LIKE '%0 errors%'
 ORDER BY el.TimeStart DESC;
 
 
@@ -122,15 +125,26 @@ ORDER BY cc.ExpirationDate DESC;
 -- ORDER BY ec.AbsoluteExpiration DESC;
 
 
--- 9) Data source / connection info per report
---    Confirms which data source (and shared vs. embedded) a report is
---    pointed at - useful when troubleshooting "wrong environment" data issues.
-SELECT
-    c.Name AS ReportName, c.Path,
-    ds.Name AS DataSourceName, ds.ConnectionString, ds.Extension
-FROM ReportServer.dbo.Catalog c
-JOIN ReportServer.dbo.DataSource ds ON c.ItemID = ds.ItemID
-ORDER BY c.Name;
+-- 9) Data source connection strings - extracts embedded & shared data sources
+--    Uses XML parsing to extract connection strings from Catalog content
+--    Confirms which data source (and connection details) a report is pointed at.
+;WITH XMLNAMESPACES (DEFAULT 'https://schemas.microsoft.com/sqlserver/reporting/2006/03/reportdatasource')
+SELECT 
+    c.Name, 
+    c.Path,
+    TRY_CAST(
+        CAST(c.Content AS VARBINARY(MAX)) AS XML
+    ).value('(//ConnectString/text())[1]', 'NVARCHAR(MAX)') AS ConnectionString
+FROM ReportServer.dbo.Catalog c 
+WHERE c.Type = 5;
+
+--    Alternative: Join to DataSource table for shared data sources
+-- SELECT
+--     c.Name AS ReportName, c.Path,
+--     ds.Name AS DataSourceName, ds.ConnectionString, ds.Extension
+-- FROM ReportServer.dbo.Catalog c
+-- JOIN ReportServer.dbo.DataSource ds ON c.ItemID = ds.ItemID
+-- ORDER BY c.Name;
 
 
 -- 10) Currently running jobs (live, right now)
