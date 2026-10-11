@@ -1,0 +1,75 @@
+/*
+My client makes extensive use of SSIS and deploys the packages to the Integration Services Catalog (ISC), and runs them via hundreds of jobs.
+
+When one of the jobs fail, I have to go get the details.
+
+Job History doesn’t have it.
+
+So my process was:
+
+Get the package path out of the job step
+Expand the ISC
+Expand SSISDB
+Expand the Folder (get this from the job step)
+Expand the Projects Node
+Expand the correct Project (get this from the job step)
+Expand Packages
+Right-click the relevant package (get this from the job step)
+Go to Reports, Standard Reports, All Executions
+Filter for Failed Executions
+Cross your fingers that you can get useful info from the result.
+Now, repeat for each job step that failed.
+
+The SSIDB database has all of this in the Tables (schema – Internal) and or the Catalog Views.
+
+It took a while, but I created this to run around those tables and views to get ALL of the errors for the last day:
+
+*/
+
+/*
+Created by Kevin Hill, Dallas DBAs LLC, 12/28/2018
+Inspired by work from Jules Behrens
+Index tested by Peter Schott
+This queries multiple SSISDB tables to return a clear path from Top to bottom 
+related to errors in an Integration Services Catalog based SSIS package.
+It has not yet been tied back to job execution, nor is it set to email info out.
+Use this as a backup to your normal job failure checks to tie it all together
+instead of spending a full cup of coffee clicking and drilling into the cumbersome 
+All Executions report.
+Free to use and modify, please leave this header as a courtesy.
+*/
+Use SSISDB
+go
+Select Distinct
+    fold.[name] as Folder_name
+    ,proj.[name] as Project_Name
+    ,pack.[name] as Package_Name
+    ,ops.[message_time]
+    ,mess.[message_source_name]
+    ,ops.[message]
+    --,mess.[execution_path]        -- this is pretty long path if you are pasting into an email or Excel
+From [internal].[projects] proj
+    Join [internal].[packages] pack on proj.project_id = pack.project_id
+    Join [internal].[folders] fold on fold.folder_id = proj.folder_id
+    Join [internal].[executions] execs on 
+        execs.folder_name = fold.[name] and
+        execs.project_name = proj.[name] and 
+        execs.package_name = pack.[name]
+    Join [internal].[operation_messages] ops on execs.execution_id = ops.operation_id
+    join [internal].[event_messages] mess on ops.[operation_id] = mess.[operation_id]
+        and mess.event_message_id = ops.operation_message_id
+        and    mess.package_name = pack.[name]
+Where 1=1
+    and ops.message_type = 120          -- errors only
+    --and mess.message_type in (120,130)  -- errors and warnings
+    and ops.message_time > getdate() - 1 -- adjust as necessary
+/*
+If you have a very large SSISDB due to activity or long retention, please consider this index:
+CREATE NONCLUSTERED INDEX [NC_OpsID_MessageType_MessgeTime] ON [internal].[operation_messages]
+(
+    [operation_id] ASC,
+    [message_time] ASC,
+    [message_type] ASC
+)
+INCLUDE ([message])
+*/
