@@ -1,4 +1,6 @@
 /*
+https://dallasdbas.com/integration-services-catalog-package-errors/
+
 My client makes extensive use of SSIS and deploys the packages to the Integration Services Catalog (ISC), and runs them via hundreds of jobs.
 
 When one of the jobs fail, I have to go get the details.
